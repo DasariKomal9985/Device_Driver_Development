@@ -209,7 +209,6 @@ sudo umount ~/mnt/rpi5_root/sys
 cd ~/rpi5_custom/linux
 sudo make modules_install INSTALL_MOD_PATH=~/mnt/rpi5_root
 
-
 📁 Modules installed at:
 
 ~/mnt/rpi5_root/lib/modules/<kernel-version>/
