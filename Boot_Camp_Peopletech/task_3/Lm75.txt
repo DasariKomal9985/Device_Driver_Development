@@ -1,0 +1,110 @@
+Task_3
+Interfacing LM75 with Raspberry Pi5 with Analysis of Driver code
+
+
+
+🔹 1️⃣ What is LM75? 
+LM75 is a digital temperature sensor that communicates using the I²C protocol.
+📌 Key Features
+🌡️ Temperature range: −55°C to +125°C
+🎯 Resolution: 0.125°C
+🔌 Interface: I²C
+🧠 Internal registers for temperature & thresholds
+🐧 Supported directly by Linux hwmon subsystem
+👉 No custom driver needed!
+
+
+🔹 2️⃣ What is I²C? 
+I²C is a 2-wire serial communication protocol:
+SDA → Data line
+SCL → Clock line
+Multiple devices share the same bus using unique addresses.
+
+
+🔹 3️⃣ Hardware Connections 🔧
+
+
+🔹 4️⃣ Enable I²C on Raspberry Pi 🛠️
+sudo raspi-config
+Enable:
+Interfacing Options → I2C → Enable
+
+
+🔹 5️⃣ Verify I²C Is Enabled ✅
+ls /dev/i2c-*
+Expected:
+/dev/i2c-1
+
+
+🔹 6️⃣ Scan I²C Bus 🔍
+i2cdetect -y 1
+Expected output:
+48
+🎉 This confirms:
+Hardware wiring is correct
+LM75 is responding
+
+
+🔹 7️⃣ Load LM75 Kernel Driver 🧠
+sudo modprobe lm75
+Verify:
+lsmod | grep lm75
+Expected:
+lm75
+👉 Driver is loaded, but device is not yet created.
+
+
+🔹 8️⃣ Create I²C Device 
+echo lm75 0x48 | sudo tee /sys/bus/i2c/devices/i2c-1/new_device
+This tells Linux:
+“An LM75 sensor exists at address 0x48 on I²C-1.”
+
+
+🔹 9️⃣ Verify Kernel Messages 🧾
+dmesg | tail -20
+Key lines:
+lm75 1-0048: hwmon4: sensor 'lm75'
+i2c i2c-1: new_device: Instantiated device lm75 at 0x48
+✔ Driver probe executed
+ ✔ hwmon device created
+
+
+🔹 🔟 Find hwmon Entry 📂
+ls /sys/class/hwmon/
+Example:
+hwmon0 hwmon1 hwmon2 hwmon3 hwmon4
+Expected:
+hwmon4: lm75
+
+
+🔹 1️⃣1️⃣ Read Temperature 🌡️
+cat /sys/class/hwmon/hwmon4/temp1_input
+Example:
+30250
+
+
+🔹 1️⃣2️⃣ Why Linux Shows 30250? 🤔 (
+Linux hwmon standard:
+temp1_input = temperature × 1000
+So:
+30250 → 30.25 °C
+25500 → 25.50 °C
+👉 Kernel avoids floating-point math for performance & safety.
+
+
+🔹 1️⃣3️⃣ Show Temperature as 25.50 °C (Shell) 🧮
+awk '{ printf "%.2f °C\n", $1/1000 }' /sys/class/hwmon/hwmon4/temp1_input
+Output:
+25.50 °C
+🔁 Live Monitoring
+watch -n 1 "awk '{ printf \"%.2f °C\n\", \$1/1000 }' /sys/class/hwmon/hwmon4/temp1_input"
+Touch the sensor 👉 temperature increases 🔥
+
+
+🔹 1️⃣4️⃣ Read Temperature Using C Program 👨‍💻
+lm75_read.c
+Compile & Run
+gcc lm75_read.c -o lm75_read
+./lm75_read
+Output:
+Temperature: 25.50 °C
