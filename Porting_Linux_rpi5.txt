@@ -1,0 +1,260 @@
+Task_1&2
+✅ Custom Boot
+
+
+✅ Custom Boot Method (Kernel + Modules + DTB + RootFS) for Raspberry Pi 5
+
+
+🎯 What we are building
+SD card will have 2 partitions:
+1) BOOT partition (FAT32)
+Contains:
+
+
+kernel_2712.img (Pi5 kernel image)
+
+
+bcm2712-rpi-5-b.dtb (Pi5 DTB)
+
+
+overlays (optional)
+
+
+config.txt + cmdline.txt
+
+
+2) ROOTFS partition (ext4)
+Contains:
+
+
+Ubuntu root filesystem (minimal or full)
+
+
+/lib/modules/<kernel-version>/...
+
+
+
+✅ Step 0: Install Required Packages on Ubuntu PC
+sudo apt update
+sudo apt install -y git bc bison flex libssl-dev make \
+  libc6-dev libncurses5-dev libelf-dev dwarves \
+  crossbuild-essential-arm64 \
+  qemu-user-static debootstrap rsync \
+  dosfstools parted kmod
+
+
+✅ Step 1: Get Raspberry Pi Linux Kernel Source
+mkdir -p ~/rpi5_custom && cd ~/rpi5_custom
+git clone --depth=1 https://github.com/raspberrypi/linux.git
+cd linux
+
+
+✅ Step 2: Configure Kernel for Raspberry Pi 5 (bcm2712)
+Pi5 uses BCM2712.
+export ARCH=arm64
+export CROSS_COMPILE=aarch64-linux-gnu-
+
+make bcm2712_defconfig
+
+(Optional) menuconfig:
+make menuconfig
+
+
+✅ Step 3: Compile Kernel + Modules + DTBs
+This will take time.
+make -j$(nproc) Image modules dtbs
+
+After build, important outputs:
+Kernel Image:
+arch/arm64/boot/Image
+DTB:
+arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dtb
+
+✅ Step 4: Prepare SD Card Partitions
+⚠️ Insert SD card and check name:
+lsblk
+
+Example SD card: /dev/sdb
+Create partitions:
+sudo parted /dev/sdb --script mklabel msdos
+sudo parted /dev/sdb --script mkpart primary fat32 1MiB 513MiB
+sudo parted /dev/sdb --script mkpart primary ext4 513MiB 100%
+sudo parted /dev/sdb --script set 1 boot on
+
+Format:
+sudo mkfs.vfat -F32 /dev/sdb1
+sudo mkfs.ext4 /dev/sdb2
+
+Mount:
+mkdir -p ~/mnt/rpi5_boot ~/mnt/rpi5_root
+sudo mount /dev/sdb1 ~/mnt/rpi5_boot
+sudo mount /dev/sdb2 ~/mnt/rpi5_root
+
+
+✅ Step 5: Install Ubuntu RootFS (ARM64) into SD Root Partition
+We’ll build Ubuntu minimal rootfs using debootstrap.
+Example: Ubuntu 24.04 (noble)
+sudo debootstrap --arch=arm64 noble ~/mnt/rpi5_root http://ports.ubuntu.com/
+
+Now enable qemu for chroot:
+sudo cp /usr/bin/qemu-aarch64-static ~/mnt/rpi5_root/usr/bin/
+
+Mount required:
+sudo mount --bind /dev ~/mnt/rpi5_root/dev
+sudo mount --bind /proc ~/mnt/rpi5_root/proc
+sudo mount --bind /sys ~/mnt/rpi5_root/sys
+
+Chroot:
+sudo chroot ~/mnt/rpi5_root /bin/bash
+
+Inside chroot run:
+apt update
+apt install -y sudo ssh net-tools network-manager systemd vim
+passwd root
+
+Create user:
+useradd -m -s /bin/bash komal
+passwd komal
+usermod -aG sudo komal
+
+Exit chroot:
+exit
+
+Unmount binds:
+sudo umount ~/mnt/rpi5_root/dev
+sudo umount ~/mnt/rpi5_root/proc
+sudo umount ~/mnt/rpi5_root/sys
+
+
+✅ Step 6: Install Kernel Modules into RootFS
+From kernel folder:
+cd ~/rpi5_custom/linux
+sudo make modules_install INSTALL_MOD_PATH=~/mnt/rpi5_root
+
+Now rootfs has:
+~/mnt/rpi5_root/lib/modules/<your-kernel-version>/
+
+✅ Step 7: Copy Kernel + DTB to BOOT Partition
+Copy kernel:
+sudo cp arch/arm64/boot/Image ~/mnt/rpi5_boot/kernel_2712.img
+
+Copy DTB:
+sudo mkdir -p ~/mnt/rpi5_boot/broadcom
+sudo cp arch/arm64/boot/dts/broadcom/bcm2712-rpi-5-b.dtb ~/mnt/rpi5_boot/broadcom/
+
+Copy overlays (optional but recommended):
+sudo cp -r arch/arm64/boot/dts/overlays ~/mnt/rpi5_boot/
+sudo cp arch/arm64/boot/dts/overlays/overlay_map.dtb ~/mnt/rpi5_boot/overlays/
+
+
+✅ Step 8: Add Firmware Boot Files (VERY IMPORTANT)
+Raspberry Pi needs boot firmware files like:
+
+
+start4.elf
+
+
+fixup4.dat
+
+
+These come from raspberrypi/firmware repo.
+Download:
+cd ~/rpi5_custom
+git clone --depth=1 https://github.com/raspberrypi/firmware.git
+
+Copy boot files:
+sudo cp firmware/boot/start4.elf ~/mnt/rpi5_boot/
+sudo cp firmware/boot/fixup4.dat ~/mnt/rpi5_boot/
+sudo cp firmware/boot/bootcode.bin ~/mnt/rpi5_boot/ 2>/dev/null || true
+
+Also copy Pi5 boot files (safe to copy all):
+sudo cp firmware/boot/*.elf ~/mnt/rpi5_boot/
+sudo cp firmware/boot/*.dat ~/mnt/rpi5_boot/
+sudo cp firmware/boot/*.bin ~/mnt/rpi5_boot/
+
+
+✅ Step 9: Create config.txt (Pi5 Boot Config)
+Create file:
+sudo nano ~/mnt/rpi5_boot/config.txt
+
+Paste:
+arm_64bit=1
+kernel=kernel_2712.img
+
+device_tree=broadcom/bcm2712-rpi-5-b.dtb
+
+enable_uart=1
+dtoverlay=disable-bt
+
+# Optional (debug)
+disable_splash=1
+boot_delay=1
+
+
+✅ Step 10: Create cmdline.txt (Kernel Boot Args)
+Create:
+sudo nano ~/mnt/rpi5_boot/cmdline.txt
+
+Paste (single line only):
+console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 fsck.repair=yes rootwait rw
+
+
+✅ Step 11: Setup fstab in Ubuntu RootFS
+Edit:
+sudo nano ~/mnt/rpi5_root/etc/fstab
+
+Add:
+/dev/mmcblk0p2  /      ext4  defaults,noatime  0  1
+/dev/mmcblk0p1  /boot  vfat  defaults          0  2
+
+Create boot mount directory:
+sudo mkdir -p ~/mnt/rpi5_root/boot
+
+
+✅ Step 12: Unmount SD Card Properly
+sync
+sudo umount ~/mnt/rpi5_boot
+sudo umount ~/mnt/rpi5_root
+
+Now insert SD card into Pi5 and power ON.
+
+✅ If Boot Fails (Most common issues)
+❌ Black screen / no boot
+Usually missing firmware boot files:
+
+
+start4.elf
+
+
+fixup4.dat
+
+
+❌ Kernel panic: cannot mount rootfs
+Fix cmdline.txt root device:
+
+
+should be: root=/dev/mmcblk0p2
+
+
+❌ No login / stuck
+You may need:
+
+
+enable systemd
+
+
+install openssh-server
+
+
+
+⭐ My Suggestion (Best for your work)
+If your main goal is LDD + kernel development, this is perfect:
+✅ Custom kernel + modules
+✅ DTB changes supported
+✅ Full control
+
+If you want, I can give you ready-to-run script (one command build + flash)
+OR we can do it step-by-step with your exact SD device name.
+Just tell me:
+✅ your Ubuntu version (20.04 / 22.04 / 24.04)
+✅ SD card device name from lsblk (like /dev/sdb)
